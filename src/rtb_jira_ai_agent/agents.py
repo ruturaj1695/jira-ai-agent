@@ -15,6 +15,7 @@ from .rag import RAGService
 class AgentState(TypedDict, total=False):
     query: str
     intent: Intent
+    history: list[dict[str, str]]
     issues: list[dict[str, Any]]
     analysis: dict[str, Any]
     knowledge: list[dict[str, Any]]
@@ -88,10 +89,7 @@ def knowledge_agent_node(state: AgentState) -> AgentState:
     except Exception as exc:
         return {"knowledge": [], "sources": [], "error": str(exc)}
 
-    sources = [
-        item.get("metadata", {}).get("source", "knowledge base")
-        for item in results
-    ]
+    sources = [item.get("metadata", {}).get("source", "knowledge base") for item in results]
     return {"knowledge": results, "sources": sources}
 
 
@@ -128,7 +126,11 @@ async def report_agent_node(state: AgentState) -> AgentState:
         }
 
     llm = LLMService(get_settings())
-    generated = await llm.format_report(state["query"], analysis)
+    generated = await llm.format_report(
+        state["query"],
+        analysis,
+        history=state.get("history", []),
+    )
     if generated:
         return {"answer": generated}
 
