@@ -8,11 +8,19 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     log_level: str = "INFO"
-    llm_provider: str = "openai"
-    llm_model: str = "gpt-4o-mini"
+
+    # Company-provided RTB Ollama platform.
+    # Keep the server URL configurable; never commit internal credentials.
+    llm_provider: str = "ollama"
+    ollama_base_url: str | None = None
+    llm_model: str = "llama3:8b"
+    ollama_embedding_model: str = "qwen3-embedding:latest"
+
+    # Optional cloud fallback for local development only.
     openai_api_key: str | None = None
     groq_api_key: str | None = None
     anthropic_api_key: str | None = None
+
     jira_base_url: str | None = None
     jira_email: str | None = None
     jira_api_token: str | None = None
