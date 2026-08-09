@@ -43,26 +43,30 @@ class LLMService:
     async def format_report(self, query: str, analysis: dict[str, Any]) -> str:
         if not self.available():
             return ""
-        model = self._model()
-        messages = [
-            SystemMessage(
-                content=(
-                    "You are an enterprise Jira reporting assistant. "
-                    "Use only the supplied validated analysis. Never invent Jira facts. "
-                    "Return a concise structured answer with findings, risks, and next actions "
-                    "only when supported by the data."
-                )
-            ),
-            HumanMessage(content=f"Query: {query}\nValidated analysis: {json.dumps(analysis, default=str)}"),
-        ]
-        response = await model.ainvoke(messages)
-        return str(response.content).strip()
+        try:
+            model = self._model()
+            messages = [
+                SystemMessage(
+                    content=(
+                        "You are an enterprise Jira reporting assistant. "
+                        "Use only the supplied validated analysis. Never invent Jira facts. "
+                        "Return a concise structured answer with findings, risks, and next actions "
+                        "only when supported by the data."
+                    )
+                ),
+                HumanMessage(
+                    content=f"Query: {query}\nValidated analysis: {json.dumps(analysis, default=str)}"
+                ),
+            ]
+            response = await model.ainvoke(messages)
+            return str(response.content).strip()
+        except Exception:
+            return ""
 
     async def classify_intent(self, query: str) -> Intent | None:
         """Ask the configured LLM for intent classification; return None on any failure."""
         if not self.available():
             return None
-        model = self._model()
         prompt = (
             "Classify the Jira user request into exactly one label: blockers, bugs_trend, "
             "spillover, velocity, search, report, knowledge, unknown. "
@@ -70,7 +74,7 @@ class LLMService:
             f"User request: {query}"
         )
         try:
-            response = await model.ainvoke([HumanMessage(content=prompt)])
+            response = await self._model().ainvoke([HumanMessage(content=prompt)])
             payload = json.loads(str(response.content))
             intent = payload.get("intent")
             allowed = {
@@ -84,5 +88,5 @@ class LLMService:
                 "unknown",
             }
             return intent if intent in allowed else None
-        except (ValueError, TypeError, json.JSONDecodeError):
+        except Exception:
             return None
