@@ -40,22 +40,33 @@ class LLMService:
             )
         raise ValueError(f"Unsupported LLM provider: {self.settings.llm_provider}")
 
-    async def format_report(self, query: str, analysis: dict[str, Any]) -> str:
+    async def format_report(
+        self,
+        query: str,
+        analysis: dict[str, Any],
+        history: list[dict[str, str]] | None = None,
+    ) -> str:
         if not self.available():
             return ""
         try:
             model = self._model()
+            history_text = json.dumps(history or [], default=str)
             messages = [
                 SystemMessage(
                     content=(
                         "You are an enterprise Jira reporting assistant. "
                         "Use only the supplied validated analysis. Never invent Jira facts. "
+                        "Use conversation history only to resolve references such as 'that sprint'. "
                         "Return a concise structured answer with findings, risks, and next actions "
                         "only when supported by the data."
                     )
                 ),
                 HumanMessage(
-                    content=f"Query: {query}\nValidated analysis: {json.dumps(analysis, default=str)}"
+                    content=(
+                        f"Conversation history: {history_text}\n"
+                        f"Current query: {query}\n"
+                        f"Validated analysis: {json.dumps(analysis, default=str)}"
+                    )
                 ),
             ]
             response = await model.ainvoke(messages)
