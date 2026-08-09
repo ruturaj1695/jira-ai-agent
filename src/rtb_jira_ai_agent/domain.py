@@ -23,6 +23,7 @@ class JiraSearchResult(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str = Field(min_length=3)
+    conversation_id: str = Field(default="default", min_length=1, max_length=100)
 
 
 class AgentResponse(BaseModel):
