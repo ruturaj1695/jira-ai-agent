@@ -71,7 +71,7 @@ class LLMService:
             ]
             response = await model.ainvoke(messages)
             return str(response.content).strip()
-        except Exception:
+        except Exception:  # noqa: BLE001 - LLM failures intentionally use the deterministic fallback.
             return ""
 
     async def classify_intent(self, query: str) -> Intent | None:
@@ -99,5 +99,5 @@ class LLMService:
                 "unknown",
             }
             return intent if intent in allowed else None
-        except Exception:
+        except Exception:  # noqa: BLE001 - classification failures fall back to deterministic routing.
             return None
