@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI, HTTPException
 
 from . import __version__
@@ -8,13 +10,18 @@ from .guardrails import validate_user_query
 from .jira_client import JiraClient
 from .llm import LLMService
 from .memory import conversation_memory
+from .observability import request_logging_middleware
 from .rag import RAGService
+
+settings = get_settings()
+logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 
 app = FastAPI(
     title="RTB Jira AI Agent",
     version=__version__,
     description="Agentic AI service for Jira question answering and reporting.",
 )
+app.middleware("http")(request_logging_middleware)
 
 
 @app.get("/health", tags=["system"])
@@ -24,7 +31,6 @@ def health() -> dict[str, str]:
 
 @app.get("/api/v1/status", tags=["system"])
 def runtime_status() -> dict[str, object]:
-    settings = get_settings()
     return {
         "llm_provider": settings.llm_provider,
         "llm_model": settings.llm_model,
