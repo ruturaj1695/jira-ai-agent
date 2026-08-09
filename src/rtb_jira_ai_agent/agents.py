@@ -86,7 +86,7 @@ def knowledge_agent_node(state: AgentState) -> AgentState:
     service = RAGService()
     try:
         results = service.search(state["query"], k=4)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - RAG failures should degrade to an empty result.
         return {"knowledge": [], "sources": [], "error": str(exc)}
 
     sources = [item.get("metadata", {}).get("source", "knowledge base") for item in results]
