@@ -1,3 +1,5 @@
+import json
+
 from langchain_core.tools import tool
 
 from .analytics import blocker_analysis, bug_trend, sprint_velocity, team_load
@@ -6,20 +8,15 @@ from .jira_client import JiraClient
 
 
 @tool
-def jira_search(jql: str) -> str:
+async def jira_search(jql: str) -> str:
     """Search Jira using JQL. Returns a compact JSON representation of issues."""
-    import asyncio
-    import json
-
-    result = asyncio.run(JiraClient(get_settings()).search(jql))
+    result = await JiraClient(get_settings()).search(jql)
     return json.dumps(result.model_dump())
 
 
 @tool
 def calculate_sprint_metrics(issue_payload: str) -> str:
     """Calculate blocker, bug, velocity, and team-load metrics from issue JSON."""
-    import json
-
     from .domain import JiraIssue
 
     payload = json.loads(issue_payload)
