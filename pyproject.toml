@@ -30,5 +30,8 @@ dev = [
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.lint.isort]
+known-first-party = ["rtb_jira_ai_agent"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
