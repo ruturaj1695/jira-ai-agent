@@ -2,7 +2,6 @@ from fastapi.testclient import TestClient
 
 from rtb_jira_ai_agent.main import app
 
-
 client = TestClient(app)
 
 
