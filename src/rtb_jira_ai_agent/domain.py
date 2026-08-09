@@ -32,4 +32,13 @@ class AgentResponse(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-Intent = Literal["blockers", "bugs_trend", "spillover", "velocity", "search", "report", "unknown"]
+Intent = Literal[
+    "blockers",
+    "bugs_trend",
+    "spillover",
+    "velocity",
+    "search",
+    "report",
+    "knowledge",
+    "unknown",
+]
