@@ -10,7 +10,10 @@ dependencies = [
   "httpx>=0.28,<1.0",
   "langchain>=0.3,<1.0",
   "langchain-openai>=0.3,<1.0",
+  "langchain-ollama>=0.3,<1.0",
   "langchain-community>=0.3,<1.0",
+  "langchain-chroma>=0.2,<1.0",
+  "langchain-text-splitters>=0.3,<1.0",
   "langgraph>=0.2,<1.0",
   "chromadb>=0.6,<1.0",
   "python-dotenv>=1.0,<2.0",
@@ -26,6 +29,9 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint.isort]
+known-first-party = ["rtb_jira_ai_agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
