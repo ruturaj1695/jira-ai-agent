@@ -8,6 +8,7 @@ from .analytics import blocker_analysis, bug_trend, sprint_velocity, team_load
 from .config import get_settings
 from .domain import Intent, JiraIssue
 from .jira_client import JiraClient
+from .llm import LLMService
 
 
 class AgentState(TypedDict, total=False):
@@ -42,8 +43,9 @@ def router_node(state: AgentState) -> AgentState:
 
 
 async def data_agent_node(state: AgentState) -> AgentState:
-    client = JiraClient(get_settings())
-    result = await client.search('project = "' + (get_settings().jira_project_key or "DEMO") + '"')
+    settings = get_settings()
+    client = JiraClient(settings)
+    result = await client.search('project = "' + (settings.jira_project_key or "DEMO") + '"')
     return {
         "issues": [issue.model_dump() for issue in result.issues],
         "sources": ["Jira API" if client.configured else "Demo Jira dataset"],
@@ -60,16 +62,21 @@ def analytics_agent_node(state: AgentState) -> AgentState:
     elif intent == "velocity":
         analysis = {"velocity": sprint_velocity(issues)}
     elif intent == "spillover":
-        # A demo-friendly proxy: completed work from older sprints is treated as history.
         analysis = {"historical_sprints": sprint_velocity(issues)}
     else:
         analysis = {"team_load": team_load(issues), "total_issues": len(issues)}
     return {"analysis": analysis}
 
 
-def report_agent_node(state: AgentState) -> AgentState:
+async def report_agent_node(state: AgentState) -> AgentState:
     intent = state["intent"]
     analysis = state.get("analysis", {})
+    llm = LLMService(get_settings())
+    if llm.available():
+        generated = await llm.format_report(state["query"], analysis)
+        if generated:
+            return {"answer": generated}
+
     if intent == "blockers":
         blockers = analysis.get("count", 0)
         high = ", ".join(analysis.get("high_priority", [])) or "none"
