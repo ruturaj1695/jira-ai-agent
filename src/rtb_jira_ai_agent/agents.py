@@ -27,6 +27,14 @@ class AgentState(TypedDict, total=False):
 def classify_intent(query: str) -> Intent:
     """Deterministic fallback used when Ollama is unavailable."""
     q = query.lower()
+
+    # Knowledge/definition requests take precedence over domain keywords. For example,
+    # "What is sprint spillover?" is a knowledge request, not a spillover analysis request.
+    if any(
+        word in q
+        for word in ("definition", "documentation", "document", "process", "policy", "what is")
+    ):
+        return "knowledge"
     if any(word in q for word in ("blocker", "blocked", "impediment", "risk")):
         return "blockers"
     if any(word in q for word in ("bug trend", "bugs trend", "bug count", "defects")):
@@ -35,11 +43,6 @@ def classify_intent(query: str) -> Intent:
         return "spillover"
     if any(word in q for word in ("velocity", "story points", "throughput")):
         return "velocity"
-    if any(
-        word in q
-        for word in ("definition", "documentation", "document", "process", "policy", "what is")
-    ):
-        return "knowledge"
     if any(word in q for word in ("report", "summary", "performance", "insights")):
         return "report"
     if any(word in q for word in ("issue", "ticket", "jira", "search", "find")):
@@ -86,7 +89,7 @@ def knowledge_agent_node(state: AgentState) -> AgentState:
     service = RAGService()
     try:
         results = service.search(state["query"], k=4)
-    except Exception as exc:  # noqa: BLE001 - RAG failures should degrade to an empty result.
+    except Exception as exc:  # noqa: BLE001 - RAG is an optional dependency/fallback path.
         return {"knowledge": [], "sources": [], "error": str(exc)}
 
     sources = [item.get("metadata", {}).get("source", "knowledge base") for item in results]
