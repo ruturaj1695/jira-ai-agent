@@ -34,7 +34,10 @@ def classify_intent(query: str) -> Intent:
         return "spillover"
     if any(word in q for word in ("velocity", "story points", "throughput")):
         return "velocity"
-    if any(word in q for word in ("definition", "documentation", "document", "process", "policy", "what is")):
+    if any(
+        word in q
+        for word in ("definition", "documentation", "document", "process", "policy", "what is")
+    ):
         return "knowledge"
     if any(word in q for word in ("report", "summary", "performance", "insights")):
         return "report"
@@ -80,7 +83,11 @@ async def data_agent_node(state: AgentState) -> AgentState:
 
 def knowledge_agent_node(state: AgentState) -> AgentState:
     service = RAGService()
-    results = service.search(state["query"], k=4)
+    try:
+        results = service.search(state["query"], k=4)
+    except Exception as exc:
+        return {"knowledge": [], "sources": [], "error": str(exc)}
+
     sources = [
         item.get("metadata", {}).get("source", "knowledge base")
         for item in results
@@ -112,29 +119,35 @@ async def report_agent_node(state: AgentState) -> AgentState:
     if intent == "knowledge":
         analysis = {
             "knowledge": [
-                {"content": item["content"], "source": item.get("metadata", {}).get("source")}
+                {
+                    "content": item["content"],
+                    "source": item.get("metadata", {}).get("source"),
+                }
                 for item in knowledge
             ]
         }
 
     llm = LLMService(get_settings())
-    if llm.available():
-        generated = await llm.format_report(state["query"], analysis)
-        if generated:
-            return {"answer": generated}
+    generated = await llm.format_report(state["query"], analysis)
+    if generated:
+        return {"answer": generated}
 
     if intent == "knowledge":
         if not knowledge:
-            answer = "No matching knowledge-base documents were found. Ingest the relevant RTB/Jira documentation first."
-        else:
-            excerpts = "\n".join(
-                f"- {item['content'][:500]}" for item in knowledge
+            answer = (
+                "No matching knowledge-base documents were found. "
+                "Ingest the relevant RTB/Jira documentation first."
             )
+        else:
+            excerpts = "\n".join(f"- {item['content'][:500]}" for item in knowledge)
             answer = f"Relevant knowledge-base context:\n{excerpts}"
     elif intent == "blockers":
         blockers = analysis.get("count", 0)
         high = ", ".join(analysis.get("high_priority", [])) or "none"
-        answer = f"Current sprint blocker analysis: {blockers} blocker(s). High-priority blockers: {high}."
+        answer = (
+            f"Current sprint blocker analysis: {blockers} blocker(s). "
+            f"High-priority blockers: {high}."
+        )
     elif intent == "bugs_trend":
         answer = f"Bug trend by sprint: {analysis.get('trend', {})}."
     elif intent == "velocity":
@@ -149,7 +162,10 @@ async def report_agent_node(state: AgentState) -> AgentState:
     elif intent == "report":
         answer = f"Jira report summary: {analysis}."
     else:
-        answer = "I can analyze Jira blockers, bug trends, spillover, velocity, team performance, reports, and knowledge-base questions."
+        answer = (
+            "I can analyze Jira blockers, bug trends, spillover, velocity, "
+            "team performance, reports, and knowledge-base questions."
+        )
     return {"answer": answer}
 
 
