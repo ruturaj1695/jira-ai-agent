@@ -74,6 +74,49 @@ class LLMService:
         except Exception:  # noqa: BLE001 - LLM failures intentionally use the deterministic fallback.
             return ""
 
+
+    async def generate_jql(
+        self,
+        query: str,
+        project_key: str | None,
+        history: list[dict[str, str]] | None = None,
+    ) -> str | None:
+        """Translate natural language into read-only, project-scoped JQL."""
+        if not self.available() or not project_key:
+            return None
+
+        prompt = (
+            "Translate the Jira user request into ONE valid Jira Cloud JQL expression. "
+            "Return JSON only: {" + '"jql"' + ": " + '"..."' + "}. "
+            "The application will add the project scope and ORDER BY clause, so do not include "
+            "a project clause or ORDER BY. Never generate mutation/write operations. "
+            "Prefer read-only Jira fields and functions such as summary, description, status, "
+            "issuetype, priority, assignee, reporter, labels, sprint, created, updated, "
+            "statusCategory, and openSprints(). "
+            "For broad searches, use a sensible filter such as updated IS NOT EMPTY. "
+            "For current-sprint questions, use sprint in openSprints() where appropriate. "
+            f"Project scope is fixed by the application to {project_key}.\n"
+            f"Conversation history: {json.dumps(history or [], default=str)}\n"
+            f"User request: {query}"
+        )
+        try:
+            response = await self._model().ainvoke([HumanMessage(content=prompt)])
+            payload = json.loads(str(response.content))
+            jql = payload.get("jql")
+            if not isinstance(jql, str):
+                return None
+
+            normalized = jql.strip()
+            lowered = normalized.lower()
+            if not normalized or "project" in lowered or ";" in normalized:
+                return None
+            if lowered.startswith("order by"):
+                return None
+
+            return f'project = "{project_key}" AND ({normalized}) ORDER BY updated DESC'
+        except Exception:  # noqa: BLE001 - invalid LLM output falls back to deterministic JQL.
+            return None
+
     async def classify_intent(self, query: str) -> Intent | None:
         """Ask the configured LLM for intent classification; return None on any failure."""
         if not self.available():
