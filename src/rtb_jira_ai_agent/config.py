@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     jira_email: str | None = None
     jira_api_token: str | None = None
     jira_project_key: str | None = None
+    jira_board_id: int | None = None
+    jira_story_points_field: str | None = None
+    jira_ssl_verify: bool = True
+    jira_ca_bundle: str | None = None
+    jira_max_results: int = 50
     chroma_persist_directory: str = "./chroma_db"
     langchain_tracing_v2: bool = False
     langchain_api_key: str | None = None
