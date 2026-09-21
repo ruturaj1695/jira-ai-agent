@@ -118,9 +118,10 @@ def analytics_agent_node(state: AgentState) -> AgentState:
         analysis = {"velocity": sprint_velocity(issues)}
     elif intent == "spillover":
         analysis = {"historical_sprints": sprint_velocity(issues)}
-    elif intent == "search":
+    elif intent in {"search", "report", "unknown"}:
         analysis = {
             "total_issues": len(issues),
+            "team_load": team_load(issues),
             "issues": [issue.model_dump() for issue in issues],
         }
     else:
