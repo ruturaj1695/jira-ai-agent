@@ -9,7 +9,7 @@ from .domain import JiraIssue, JiraSearchResult
 
 
 class JiraClient:
-    """Small Jira adapter. Uses Jira Cloud REST when configured; demo data otherwise."""
+    """Jira REST adapter with a safe demo fallback for local development."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -22,48 +22,115 @@ class JiraClient:
             and self.settings.jira_api_token
         )
 
+    @property
+    def live_scope_configured(self) -> bool:
+        """Real Jira search requires a project scope to avoid cross-project queries."""
+        return self.configured and bool(self.settings.jira_project_key)
+
+    def _verify_ssl(self) -> bool | str:
+        """Return True/False or a CA bundle path for Jira TLS verification."""
+        if self.settings.jira_ca_bundle:
+            return self.settings.jira_ca_bundle
+        return self.settings.jira_ssl_verify
+
+    def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=20,
+            verify=self._verify_ssl(),
+            follow_redirects=True,
+        )
+
+    def _auth(self) -> tuple[str, str]:
+        if not self.configured:
+            raise RuntimeError("Jira credentials are not configured")
+        return (
+            self.settings.jira_email or "",
+            self.settings.jira_api_token or "",
+        )
+
     async def get_active_sprint(self) -> str | None:
         """
-        Fetch the currently active sprint from the configured Jira board.
-        Returns sprint name on success, None if not configured or no active sprint found.
-        Falls back to demo sprint if Jira is not configured.
+        Fetch the currently active sprint from the configured Jira Software board.
+        Uses the Jira Software Agile REST API.
         """
         if not self.configured or not self.settings.jira_board_id:
-            return self.settings.demo_active_sprint
+            return None
 
         url = (
             f"{self.settings.jira_base_url.rstrip('/')}"
-            f"/rest/api/3/board/{self.settings.jira_board_id}/sprint"
+            f"/rest/agile/1.0/board/{self.settings.jira_board_id}/sprint"
         )
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.get(
-                    url,
-                    params={"state": "active"},
-                    auth=(self.settings.jira_email, self.settings.jira_api_token),
-                    headers={"Accept": "application/json"},
-                )
-                response.raise_for_status()
-                payload: dict[str, Any] = response.json()
-                sprints = payload.get("values", [])
-                if sprints:
-                    return sprints[0].get("name")
-        except Exception:
-            pass
-        return self.settings.demo_active_sprint
+        async with self._client() as client:
+            response = await client.get(
+                url,
+                params={"state": "active", "maxResults": 1},
+                auth=self._auth(),
+                headers={"Accept": "application/json"},
+            )
+            response.raise_for_status()
+            payload: dict[str, Any] = response.json()
+        sprints = payload.get("values", [])
+        if not sprints:
+            return None
+        return sprints[0].get("name")
 
-    async def search(self, jql: str, max_results: int = 50) -> JiraSearchResult:
+    async def search(self, jql: str, max_results: int | None = None) -> JiraSearchResult:
+        """
+        Execute JQL against live Jira when configured.
+
+        The current Jira Cloud enhanced search endpoint is used first. A legacy
+        /rest/api/3/search fallback is retained for installations that still expose it.
+        """
         if not self.configured:
             return self._demo_search(jql)
 
-        url = f"{self.settings.jira_base_url.rstrip('/')}/rest/api/3/search"
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get(
-                url,
-                params={"jql": jql, "maxResults": max_results},
-                auth=(self.settings.jira_email, self.settings.jira_api_token),
-                headers={"Accept": "application/json"},
+        if not self.live_scope_configured:
+            raise RuntimeError(
+                "JIRA_PROJECT_KEY is required for live Jira search so the agent "
+                "cannot accidentally query across projects."
             )
+
+        limit = max_results or self.settings.jira_max_results
+        base_url = self.settings.jira_base_url.rstrip("/")
+        headers = {"Accept": "application/json"}
+
+        fields = [
+            "summary",
+            "status",
+            "issuetype",
+            "priority",
+            "assignee",
+            "labels",
+            "sprint",
+        ]
+        if self.settings.jira_story_points_field:
+            fields.append(self.settings.jira_story_points_field)
+
+        async with self._client() as client:
+            response = await client.post(
+                f"{base_url}/rest/api/3/search/jql",
+                json={
+                    "jql": jql,
+                    "maxResults": limit,
+                    "fields": fields,
+                },
+                auth=self._auth(),
+                headers={**headers, "Content-Type": "application/json"},
+            )
+
+            if response.status_code in {404, 405}:
+                # Compatibility fallback for older Jira Cloud/server configurations.
+                response = await client.get(
+                    f"{base_url}/rest/api/3/search",
+                    params={
+                        "jql": jql,
+                        "maxResults": limit,
+                        "fields": ",".join(fields),
+                    },
+                    auth=self._auth(),
+                    headers=headers,
+                )
+
             response.raise_for_status()
             payload: dict[str, Any] = response.json()
 
@@ -73,6 +140,14 @@ class JiraClient:
     def _map_issue(self, item: dict[str, Any]) -> JiraIssue:
         fields = item.get("fields", {})
         assignee = fields.get("assignee") or {}
+
+        story_points = 0
+        if self.settings.jira_story_points_field:
+            story_points = fields.get(self.settings.jira_story_points_field) or 0
+        if not story_points:
+            # Keep the mapper safe when the installation uses a different custom field.
+            story_points = fields.get("storyPoints") or 0
+
         return JiraIssue(
             key=item["key"],
             summary=fields.get("summary", ""),
@@ -81,7 +156,7 @@ class JiraClient:
             priority=(fields.get("priority") or {}).get("name", "Medium"),
             assignee=assignee.get("displayName"),
             sprint=self._sprint_name(fields.get("sprint")),
-            story_points=fields.get(self.settings.jira_story_points_field) or 0,
+            story_points=story_points,
             labels=fields.get("labels") or [],
         )
 
@@ -163,9 +238,8 @@ class JiraClient:
         if "blocked" in normalized:
             data = [item for item in data if item.status.lower() == "blocked"]
         if "sprint" in normalized:
-            # Extract sprint name from JQL (e.g., 'sprint = "Sprint 24"')
             for sprint_name in ["Sprint 24", "Sprint 23"]:
-                if f'"{sprint_name}"' in normalized or f"'{sprint_name}'" in normalized:
+                if f'"{sprint_name.lower()}"' in normalized or f"'{sprint_name.lower()}'" in normalized:
                     data = [item for item in data if item.sprint == sprint_name]
                     break
         return JiraSearchResult(issues=data, total=len(data))

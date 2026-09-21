@@ -77,7 +77,18 @@ async def router_node(state: AgentState) -> AgentState:
 async def data_agent_node(state: AgentState) -> AgentState:
     settings = get_settings()
     client = JiraClient(settings)
-    jql = build_jql(state["query"], state["intent"], settings.jira_project_key)
+    llm = LLMService(settings)
+
+    # Prefer real natural-language-to-JQL translation when Ollama is configured.
+    # The deterministic builder remains a safe fallback for offline/demo mode.
+    jql = await llm.generate_jql(
+        state["query"],
+        settings.jira_project_key,
+        history=state.get("history", []),
+    )
+    if not jql:
+        jql = build_jql(state["query"], state["intent"], settings.jira_project_key)
+
     result = await client.search(jql)
     return {
         "issues": [issue.model_dump() for issue in result.issues],
@@ -107,6 +118,12 @@ def analytics_agent_node(state: AgentState) -> AgentState:
         analysis = {"velocity": sprint_velocity(issues)}
     elif intent == "spillover":
         analysis = {"historical_sprints": sprint_velocity(issues)}
+    elif intent in {"search", "report", "unknown"}:
+        analysis = {
+            "total_issues": len(issues),
+            "team_load": team_load(issues),
+            "issues": [issue.model_dump() for issue in issues],
+        }
     else:
         analysis = {"team_load": team_load(issues), "total_issues": len(issues)}
     return {"analysis": analysis}
@@ -163,7 +180,14 @@ async def report_agent_node(state: AgentState) -> AgentState:
             f"Available sprint metrics: {analysis.get('historical_sprints', {})}."
         )
     elif intent == "search":
-        answer = f"I retrieved {len(state.get('issues', []))} Jira issue(s)."
+        issue_lines = "\n".join(
+            f"- {item['key']}: {item['summary']} | {item['status']} | {item['priority']}"
+            for item in state.get("issues", [])
+        )
+        answer = (
+            f"I retrieved {len(state.get('issues', []))} Jira issue(s) from the configured project.\n"
+            f"{issue_lines or 'No matching Jira issues found.'}"
+        )
     elif intent == "report":
         answer = f"Jira report summary: {analysis}."
     else:
