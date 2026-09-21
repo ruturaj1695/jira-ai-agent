@@ -43,8 +43,10 @@ User -> FastAPI -> Guardrails -> Router Agent
 - Optional OpenAI fallback for local experimentation
 - Router agent with deterministic fallback
 - Data retrieval agent
-- Conservative JQL generation
-- Jira Cloud REST adapter
+- Natural-language-to-JQL generation through the configured Ollama model
+- Project-scoped, read-only JQL execution against live Jira
+- Jira Cloud REST adapter using the current enhanced JQL search endpoint with legacy fallback
+- Configurable Jira TLS verification / corporate CA bundle support
 - Demo Jira dataset fallback for development
 - LangChain Jira and analytics tools
 - Chroma RAG service
@@ -85,7 +87,7 @@ pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-Connect to the company VPN, set `OLLAMA_BASE_URL`, and start:
+Connect to the company VPN, set `OLLAMA_BASE_URL` to the exact internal server endpoint supplied by the company, and start:
 
 ```bash
 uvicorn rtb_jira_ai_agent.main:app --app-dir src --reload
@@ -131,8 +133,20 @@ Set:
 - `JIRA_EMAIL`
 - `JIRA_API_TOKEN`
 - `JIRA_PROJECT_KEY`
+- optional `JIRA_BOARD_ID` for active-sprint lookups
+- optional `JIRA_STORY_POINTS_FIELD` when the Jira installation uses a custom story-points field
+- `JIRA_SSL_VERIFY=true` by default
+- optional `JIRA_CA_BUNDLE` for the company-approved CA certificate
 
 Never commit `.env` or API tokens.
+
+### Live Jira behavior
+
+When Jira credentials and a project key are configured, non-knowledge queries are executed against the configured Jira project. With Ollama available, the router asks the model to translate the natural-language request into read-only, project-scoped JQL; the resulting JQL is then sent to Jira and the response is analyzed by Python. The application does not use the demo issue dataset in live mode.
+
+If Ollama is unavailable, the application falls back to deterministic JQL rules. Those fallback rules intentionally cover a smaller set of known intents; full natural-language Jira search requires the configured LLM.
+
+The current Jira client uses `POST /rest/api/3/search/jql` first and falls back to the older `/rest/api/3/search` endpoint when necessary. The Jira Software sprint lookup uses `/rest/agile/1.0/board/{boardId}/sprint`.
 
 ## RTB milestone mapping
 
@@ -147,3 +161,14 @@ PYTHONPATH=src python scripts/evaluate.py
 ```
 
 The baseline checks representative intent classification and response generation. The final RTB package still needs deeper evaluation of RAG retrieval, faithfulness, answer relevancy, tool selection, latency, failure cases, and improvements.
+
+
+## Corporate TLS troubleshooting
+
+If live Jira calls fail with `SSL: CERTIFICATE_VERIFY_FAILED` and a self-signed certificate message:
+
+1. Prefer the company-approved CA/root certificate and set `JIRA_CA_BUNDLE=<path-to-ca-bundle>`.
+2. Keep `JIRA_SSL_VERIFY=true`.
+3. For temporary local diagnosis only, `JIRA_SSL_VERIFY=false` disables certificate verification. Do not use this as the final enterprise configuration.
+
+The RTB orientation screenshot provides three internal Ollama server addresses and lists the available models, but it does not show the HTTP protocol/port. Do not hard-code those internal addresses or credentials into the repository; use the exact endpoint provided by the company/GlobalProtect environment.
