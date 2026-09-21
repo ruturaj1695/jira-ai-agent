@@ -2,11 +2,10 @@ import pytest
 
 from rtb_jira_ai_agent.agents import classify_intent
 from rtb_jira_ai_agent.analytics import blocker_analysis, sprint_velocity
-from rtb_jira_ai_agent.domain import JiraIssue
-
 from rtb_jira_ai_agent.config import Settings
-from rtb_jira_ai_agent.jira_client import JiraClient
+from rtb_jira_ai_agent.domain import JiraIssue
 from rtb_jira_ai_agent.guardrails import validate_user_query
+from rtb_jira_ai_agent.jira_client import JiraClient
 
 
 def test_classify_blockers() -> None:
