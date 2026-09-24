@@ -124,7 +124,10 @@ class LLMService:
         prompt = (
             "Classify the Jira user request into exactly one label: blockers, bugs_trend, "
             "spillover, velocity, search, report, knowledge, unknown. "
-            "Return JSON only: {\"intent\": \"label\"}.\n\n"
+            "Use bugs_trend only when the user explicitly asks for a bug trend/history over time. "
+            "Use search for a specific Jira issue query, filter, count, assignment, status, date, "
+            "priority, keyword, or list request. For example, 'how many bugs are assigned to me?' "
+            "must be classified as search. Return JSON only: {\"intent\": \"label\"}.\n\n"
             f"User request: {query}"
         )
         try:
