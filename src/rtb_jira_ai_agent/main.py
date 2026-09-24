@@ -64,7 +64,8 @@ async def query_agent(request: QueryRequest) -> AgentResponse:
         sources=result.get("sources", []),
         metadata={
             "conversation_id": request.conversation_id,
-            "issue_count": len(result.get("issues", [])),
+            "issue_count": result.get("jira_total", len(result.get("issues", []))),
+            "returned_issue_count": len(result.get("issues", [])),
             "analysis": result.get("analysis", {}),
         },
     )
