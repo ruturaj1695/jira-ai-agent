@@ -79,3 +79,24 @@ def test_jira_live_scope_requires_project_key() -> None:
     client = JiraClient(settings)
     assert client.configured
     assert not client.live_scope_configured
+
+
+def test_classify_count_bugs_assigned_to_me_as_search() -> None:
+    assert classify_intent("How many bugs are assigned to me?") == "search"
+
+
+def test_build_jql_for_count_bugs_assigned_to_me() -> None:
+    from rtb_jira_ai_agent.agents import build_jql
+
+    jql = build_jql("How many bugs are assigned to me?", "search", "EDTGD")
+    assert 'project = "EDTGD"' in jql
+    assert 'issuetype = "Bug"' in jql
+    assert "assignee = currentUser()" in jql
+
+
+def test_build_jql_for_current_sprint() -> None:
+    from rtb_jira_ai_agent.agents import build_jql
+
+    jql = build_jql("Show open issues in the current sprint", "search", "EDTGD")
+    assert "sprint in openSprints()" in jql
+    assert 'statusCategory != "Done"' in jql

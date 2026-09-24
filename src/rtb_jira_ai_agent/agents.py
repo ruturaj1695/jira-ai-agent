@@ -17,6 +17,7 @@ class AgentState(TypedDict, total=False):
     intent: Intent
     history: list[dict[str, str]]
     issues: list[dict[str, Any]]
+    jira_total: int
     analysis: dict[str, Any]
     knowledge: list[dict[str, Any]]
     answer: str
@@ -37,7 +38,7 @@ def classify_intent(query: str) -> Intent:
         return "knowledge"
     if any(word in q for word in ("blocker", "blocked", "impediment", "risk")):
         return "blockers"
-    if any(word in q for word in ("bug trend", "bugs trend", "bug count", "defects")):
+    if any(word in q for word in ("bug trend", "bugs trend", "bug count", "defects trend")):
         return "bugs_trend"
     if "spillover" in q or "carried over" in q or "carry over" in q:
         return "spillover"
@@ -45,7 +46,29 @@ def classify_intent(query: str) -> Intent:
         return "velocity"
     if any(word in q for word in ("report", "summary", "performance", "insights")):
         return "report"
-    if any(word in q for word in ("issue", "ticket", "jira", "search", "find")):
+    if any(
+        phrase in q
+        for phrase in (
+            "how many",
+            "count",
+            "issue",
+            "issues",
+            "ticket",
+            "tickets",
+            "jira",
+            "search",
+            "find",
+            "show",
+            "assigned to",
+            "assigned",
+            "my issues",
+            "mine",
+            "open",
+            "unresolved",
+            "created",
+            "updated",
+        )
+    ):
         return "search"
     return "unknown"
 
@@ -60,8 +83,22 @@ def build_jql(query: str, intent: Intent, project_key: str | None) -> str:
         clauses.append('status = "Blocked"')
     elif intent == "bugs_trend":
         clauses.append('issuetype = "Bug"')
-    elif "high priority" in normalized:
+
+    # Safe deterministic filters for common natural-language Jira queries.
+    # These are fallback rules only; when Ollama is available, generate_jql()
+    # can express richer filters.
+    if "bug" in normalized and intent != "bugs_trend":
+        clauses.append('issuetype = "Bug"')
+    if any(phrase in normalized for phrase in ("assigned to me", "my issues", "issues assigned to me", "mine")):
+        clauses.append("assignee = currentUser()")
+    if "high priority" in normalized:
         clauses.append('priority = "High"')
+    if "current sprint" in normalized:
+        clauses.append("sprint in openSprints()")
+    if "unresolved" in normalized:
+        clauses.append("resolution IS EMPTY")
+    elif "open" in normalized:
+        clauses.append('statusCategory != "Done"')
 
     return " AND ".join(clauses) + " ORDER BY updated DESC"
 
@@ -70,7 +107,11 @@ async def router_node(state: AgentState) -> AgentState:
     settings = get_settings()
     llm = LLMService(settings)
     llm_intent = await llm.classify_intent(state["query"])
-    intent = llm_intent or classify_intent(state["query"])
+    fallback_intent = classify_intent(state["query"])
+    # Prefer deterministic routing when it recognizes a supported Jira intent.
+    # This prevents an LLM "unknown" or generic label from turning a concrete
+    # Jira filter/count request into a project-wide search.
+    intent = fallback_intent if fallback_intent != "unknown" else (llm_intent or "unknown")
     return {"intent": intent, "sources": []}
 
 
@@ -92,6 +133,7 @@ async def data_agent_node(state: AgentState) -> AgentState:
     result = await client.search(jql)
     return {
         "issues": [issue.model_dump() for issue in result.issues],
+        "jira_total": result.total,
         "sources": ["Jira API" if client.configured else "Demo Jira dataset"],
     }
 
@@ -120,7 +162,8 @@ def analytics_agent_node(state: AgentState) -> AgentState:
         analysis = {"historical_sprints": sprint_velocity(issues)}
     elif intent in {"search", "report", "unknown"}:
         analysis = {
-            "total_issues": len(issues),
+            "total_issues": state.get("jira_total", len(issues)),
+            "returned_issue_count": len(issues),
             "team_load": team_load(issues),
             "issues": [issue.model_dump() for issue in issues],
         }
@@ -180,14 +223,19 @@ async def report_agent_node(state: AgentState) -> AgentState:
             f"Available sprint metrics: {analysis.get('historical_sprints', {})}."
         )
     elif intent == "search":
-        issue_lines = "\n".join(
-            f"- {item['key']}: {item['summary']} | {item['status']} | {item['priority']}"
-            for item in state.get("issues", [])
-        )
-        answer = (
-            f"I retrieved {len(state.get('issues', []))} Jira issue(s) from the configured project.\n"
-            f"{issue_lines or 'No matching Jira issues found.'}"
-        )
+        total = analysis.get("total_issues", len(state.get("issues", [])))
+        query_lower = state["query"].lower()
+        if "how many" in query_lower or "count" in query_lower:
+            answer = f"I found {total} matching Jira issue(s) in the configured project."
+        else:
+            issue_lines = "\n".join(
+                f"- {item['key']}: {item['summary']} | {item['status']} | {item['priority']}"
+                for item in state.get("issues", [])
+            )
+            answer = (
+                f"I retrieved {total} matching Jira issue(s) from the configured project.\n"
+                f"{issue_lines or 'No matching Jira issues found in the returned page.'}"
+            )
     elif intent == "report":
         answer = f"Jira report summary: {analysis}."
     else:
