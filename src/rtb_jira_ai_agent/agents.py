@@ -93,7 +93,10 @@ async def router_node(state: AgentState) -> AgentState:
     settings = get_settings()
     llm = LLMService(settings)
     llm_intent = await llm.classify_intent(state["query"])
-    intent = llm_intent or classify_intent(state["query"])
+    fallback_intent = classify_intent(state["query"])
+    # Treat an LLM "unknown" result as non-authoritative so common Jira query
+    # patterns such as counts, assignments, filters, and lists still route to search.
+    intent = fallback_intent if llm_intent in (None, "unknown") else llm_intent
     return {"intent": intent, "sources": []}
 
 
