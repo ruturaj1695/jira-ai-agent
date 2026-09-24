@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 from typing import Any, TypedDict
 
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
+from langgraph.prebuilt import create_react_agent
 
 from .analytics import blocker_analysis, bug_trend, sprint_velocity, team_load
 from .config import get_settings
@@ -10,6 +13,7 @@ from .domain import Intent, JiraIssue
 from .jira_client import JiraClient
 from .llm import LLMService
 from .rag import RAGService
+from .tools import AGENT_TOOLS
 
 
 class AgentState(TypedDict, total=False):
@@ -22,6 +26,41 @@ class AgentState(TypedDict, total=False):
     answer: str
     sources: list[str]
     error: str
+
+
+AGENTIC_SYSTEM_PROMPT = """You are the RTB Jira reporting/insights agent for project {project_key}.
+
+You can answer ANY question about this Jira project — counts, filters,
+assignments, blockers, bug trends, velocity, team load, sprint status, or
+process/definition questions — by using your tools. Do not guess at Jira
+data; always call jira_search (and calculate_sprint_metrics for aggregation
+questions) before answering anything about issues, counts, or people.
+Use knowledge_search for conceptual/process/definition questions instead.
+
+Rules:
+- Never fabricate issue keys, counts, names, or statuses — every concrete
+  fact in your answer must come from a tool result.
+- jira_search only accepts the filter portion of JQL; project scope and
+  ordering are added automatically and cannot be overridden.
+- For "how many"/count questions, prefer the "total" field from jira_search
+  over counting the (possibly paginated) "issues" list.
+- "assigned to me" / "my issues" means assignee = currentUser().
+- If a tool call fails or returns no data, say so plainly rather than
+  inventing an answer.
+- Answer concisely in natural language. Only mention JQL or tool names if
+  the user asks how you got the answer.
+"""
+
+
+def _history_to_messages(history: list[dict[str, str]]) -> list[Any]:
+    messages: list[Any] = []
+    for turn in history:
+        role, content = turn.get("role"), turn.get("content", "")
+        if role == "user":
+            messages.append(HumanMessage(content=content))
+        elif role == "assistant":
+            messages.append(AIMessage(content=content))
+    return messages
 
 
 def classify_intent(query: str) -> Intent:
@@ -72,6 +111,86 @@ async def router_node(state: AgentState) -> AgentState:
     llm_intent = await llm.classify_intent(state["query"])
     intent = llm_intent or classify_intent(state["query"])
     return {"intent": intent, "sources": []}
+
+
+async def agentic_node(state: AgentState) -> AgentState:
+    """Free-form path: let the LLM choose which tool(s) to call for any question.
+
+    This replaces the fixed-intent pipeline entirely when a model is
+    configured. It's the only node that can answer questions outside the
+    small set of intents the deterministic fallback below understands.
+    """
+    settings = get_settings()
+    llm = LLMService(settings)
+    project_key = settings.jira_project_key or "the configured project"
+    agent = create_react_agent(
+        llm.chat_model(),
+        tools=AGENT_TOOLS,
+        prompt=AGENTIC_SYSTEM_PROMPT.format(project_key=project_key),
+    )
+
+    messages = _history_to_messages(state.get("history", [])) + [
+        HumanMessage(content=state["query"])
+    ]
+
+    try:
+        result = await agent.ainvoke({"messages": messages})
+    except Exception as exc:  # noqa: BLE001 - fall back to the deterministic pipeline below.
+        return {"error": str(exc)}
+
+    result_messages = result.get("messages", [])
+    answer = ""
+    for message in reversed(result_messages):
+        if isinstance(message, AIMessage) and message.content:
+            answer = str(message.content)
+            break
+
+    sources: set[str] = set()
+    issues: list[dict[str, Any]] = []
+    jira_total: int | None = None
+    for message in result_messages:
+        if not isinstance(message, ToolMessage):
+            continue
+        if message.name == "jira_search":
+            sources.add("Jira API" if JiraClient(settings).configured else "Demo Jira dataset")
+            try:
+                payload = json.loads(message.content)
+                issues = payload.get("issues", issues)
+                jira_total = payload.get("total", jira_total)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        elif message.name == "knowledge_search":
+            sources.add("Knowledge base")
+        elif message.name == "calculate_sprint_metrics":
+            sources.add("Jira analytics")
+        elif message.name == "current_sprint_name":
+            sources.add("Jira API")
+
+    return {
+        "answer": answer or "I wasn't able to produce an answer from the available tools.",
+        "intent": "agentic",
+        "sources": sorted(sources) or ["LLM reasoning"],
+        "issues": issues,
+        "jira_total": jira_total if jira_total is not None else len(issues),
+    }
+
+
+def route_from_start(state: AgentState) -> str:
+    """Use the free-form tool-calling agent whenever a model is configured.
+
+    The fixed-intent pipeline (router -> data/knowledge -> analytics -> report)
+    is kept only as the offline fallback for when no LLM is reachable — it can
+    never cover arbitrary phrasing, only the deterministic path below can.
+    """
+    if LLMService(get_settings()).available():
+        return "agentic"
+    return "router"
+
+
+def route_after_agentic(state: AgentState) -> str:
+    # If the agentic path errored (e.g. transient model failure), degrade
+    # gracefully to the deterministic pipeline instead of failing the request.
+    return "router" if state.get("error") else END
 
 
 async def data_agent_node(state: AgentState) -> AgentState:
@@ -204,13 +323,23 @@ def route_after_router(state: AgentState) -> str:
 
 def build_graph():
     graph = StateGraph(AgentState)
+    graph.add_node("agentic", agentic_node)
     graph.add_node("router", router_node)
     graph.add_node("data", data_agent_node)
     graph.add_node("knowledge", knowledge_agent_node)
     graph.add_node("analytics", analytics_agent_node)
     graph.add_node("report", report_agent_node)
 
-    graph.add_edge(START, "router")
+    graph.add_conditional_edges(
+        START,
+        route_from_start,
+        {"agentic": "agentic", "router": "router"},
+    )
+    graph.add_conditional_edges(
+        "agentic",
+        route_after_agentic,
+        {"router": "router", END: END},
+    )
     graph.add_conditional_edges(
         "router",
         route_after_router,

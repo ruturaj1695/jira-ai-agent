@@ -42,4 +42,5 @@ Intent = Literal[
     "report",
     "knowledge",
     "unknown",
+    "agentic",
 ]

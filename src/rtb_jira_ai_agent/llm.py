@@ -40,6 +40,10 @@ class LLMService:
             )
         raise ValueError(f"Unsupported LLM provider: {self.settings.llm_provider}")
 
+    def chat_model(self):
+        """Public accessor for the configured chat model (used by the tool-calling agent)."""
+        return self._model()
+
     async def format_report(
         self,
         query: str,
