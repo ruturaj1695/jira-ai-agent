@@ -83,8 +83,22 @@ def build_jql(query: str, intent: Intent, project_key: str | None) -> str:
         clauses.append('status = "Blocked"')
     elif intent == "bugs_trend":
         clauses.append('issuetype = "Bug"')
-    elif "high priority" in normalized:
+
+    # Safe deterministic filters for common natural-language Jira queries.
+    # These are fallback rules only; when Ollama is available, generate_jql()
+    # can express richer filters.
+    if "bug" in normalized and intent != "bugs_trend":
+        clauses.append('issuetype = "Bug"')
+    if any(phrase in normalized for phrase in ("assigned to me", "my issues", "issues assigned to me", "mine")):
+        clauses.append("assignee = currentUser()")
+    if "high priority" in normalized:
         clauses.append('priority = "High"')
+    if "current sprint" in normalized:
+        clauses.append("sprint in openSprints()")
+    if "unresolved" in normalized:
+        clauses.append("resolution IS EMPTY")
+    elif "open" in normalized:
+        clauses.append('statusCategory != "Done"')
 
     return " AND ".join(clauses) + " ORDER BY updated DESC"
 
